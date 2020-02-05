@@ -251,6 +251,33 @@ def train(args, train_dataset, model, tokenizer):
 
     return global_step, tr_loss / global_step
 
+def test_gather(rank, world_size):
+    input_tensor = (torch.ones(2,5)*rank).cuda()
+    gather_list = [torch.zeros(2,5).cuda() for i in range(world_size-1)]
+    group = torch.distributed.new_group([0,2,3])
+    xprint(f'group: {group}')
+    torch.distributed.all_gather(gather_list, input_tensor, group=group)
+    for output_tensor in gather_list:
+        xprint(f'tensor {output_tensor}')
+
+def gather_output(inputs, world_size):
+    group = torch.distributed.new_group(list(range(world_size)))
+    if isinstance(inputs, torch.tensor):
+        gather_list = [torch.zeros_like(inputs) for i in range(world_size)]
+        torch.distributed.all_gather(gather_list, inputs, group=group)
+        return torch.cat(gather_list)
+    elif isinstance(inputs, (tuple, list)):
+        outputs = []
+        for input_tensor in inputs:
+            assert isinstance(input_tensor, torch.tensor)
+            gather_list = [torch.zeros_like(input_tensor) for i in range(world_size)]
+            torch.distributed.all_gather(gather_list, input_tensor, group=group)
+            output_tensor = torch.cat(gather_list)
+            outputs.append(output_tensor)
+        return outputs
+    else:
+        xprint(f'distributed gather inputs type error')
+        return None
 
 def evaluate(args, model, tokenizer, prefix=""):
     dataset, examples, features = load_and_cache_examples(args, tokenizer, evaluate=True, output_examples=True)
@@ -281,6 +308,21 @@ def evaluate(args, model, tokenizer, prefix=""):
                 inputs.update({'cls_index': batch[4],
                                'p_mask':    batch[5]})
             outputs = model(**inputs)
+            if args.local_rank != -1:
+                xprint(f'example_indices size {example_indices.size()}')
+                xprint(f'outputs[0] size {outputs[0].size()}')
+                xprint(f'outputs[1] size {outputs[1].size()}')
+                xprint(f'outputs[2] size {outputs[2].size()}')
+                xprint(f'outputs[3] size {outputs[3].size()}')
+                xprint(f'outputs[4] size {outputs[4].size()}')
+                example_indices = gather_output(example_indices, args.world_size)
+                outputs = gather_output(outputs, args.world_size)
+                xprint(f'example_indices size {example_indices.size()}')
+                xprint(f'outputs[0] size {outputs[0].size()}')
+                xprint(f'outputs[1] size {outputs[1].size()}')
+                xprint(f'outputs[2] size {outputs[2].size()}')
+                xprint(f'outputs[3] size {outputs[3].size()}')
+                xprint(f'outputs[4] size {outputs[4].size()}')
 
         for i, example_index in enumerate(example_indices):
             eval_feature = features[example_index.item()]
@@ -518,6 +560,7 @@ def main():
         args.local_rank = rank
         args.device_id = local_rank
         world_size = int(os.environ['SLURM_NTASKS'])
+        args.world_size = world_size
         dist_init(host_addr, rank, local_rank, world_size, '2' + os.environ['SLURM_JOBID'][-4:])
         test_gather(rank, world_size)
         device = torch.device("cuda", local_rank)
@@ -596,6 +639,7 @@ def main():
     # Evaluation - we can ask to evaluate all the checkpoints (sub-directories) in a directory
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
+
         checkpoints = [args.output_dir]
         if args.eval_all_checkpoints:
             checkpoints = list(os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + '/**/' + WEIGHTS_NAME, recursive=True)))
@@ -608,6 +652,11 @@ def main():
             global_step = checkpoint.split('-')[-1] if len(checkpoints) > 1 else ""
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
+            # Distributed evaluation
+            if args.local_rank != -1:
+                model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.device_id],
+                                                                  output_device=args.device_id,
+                                                                  find_unused_parameters=True)
 
             # Evaluate
             result = evaluate(args, model, tokenizer, prefix=global_step)
