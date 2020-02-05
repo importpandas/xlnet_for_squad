@@ -72,6 +72,23 @@ MODEL_CLASSES = {
 
 torch.multiprocessing.set_start_method('spawn')
 
+#modified print function name
+def modified_print(*args, local_rank=-1 ,**kargs):
+    if local_rank == 0 or local_rank==-1:
+        print(*args,flush=True,**kargs)
+
+#print with flush=True and only print with args.local_rank=-1 or 0
+xprint = functools.partial(modified_print,local_rank=int(os.environ['SLURM_PROCID']))
+
+def test_gather(rank, world_size):
+    input_tensor = (torch.ones(2,5)*rank).cuda()
+    gather_list = [torch.zeros(2,5).cuda() for i in range(world_size-1)]
+    group = torch.distributed.new_group([0,2,3])
+    xprint(f'group: {group}')
+    torch.distributed.all_gather(gather_list, input_tensor, group=group)
+    for output_tensor in gather_list:
+        xprint(f'tensor {output_tensor}')
+
 def get_oneNode_addr():
     try:
         nodelist = os.environ['SLURM_STEP_NODELIST']
@@ -100,16 +117,6 @@ def stats(output, label):
     else:
         num_matches, num_utts = 0, 0
     return num_matches, num_utts
-
-#modified print function name
-def modified_print(*args, local_rank=-1 ,**kargs):
-    if local_rank == 0 or local_rank==-1:
-        print(*args,flush=True,**kargs)
-
-#print with flush=True and only print with args.local_rank=-1 or 0
-xprint = functools.partial(modified_print,local_rank=int(os.environ['SLURM_PROCID']))
-
-
 
 def set_seed(args):
     random.seed(args.seed)
@@ -512,6 +519,7 @@ def main():
         args.device_id = local_rank
         world_size = int(os.environ['SLURM_NTASKS'])
         dist_init(host_addr, rank, local_rank, world_size, '2' + os.environ['SLURM_JOBID'][-4:])
+        test_gather(rank, world_size)
         device = torch.device("cuda", local_rank)
         xprint(f'host_addr {host_addr}')
         xprint(f'local rank {local_rank}')
