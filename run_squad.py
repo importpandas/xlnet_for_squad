@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
+# Copyright 2018 Te Google AI Language Team Authors and The HuggingFace Inc. team.
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -248,7 +248,6 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
-
     return global_step, tr_loss / global_step
 
 def test_gather(rank, world_size):
@@ -262,14 +261,14 @@ def test_gather(rank, world_size):
 
 def gather_output(inputs, world_size):
     group = torch.distributed.new_group(list(range(world_size)))
-    if isinstance(inputs, torch.tensor):
+    if isinstance(inputs, torch.Tensor):
         gather_list = [torch.zeros_like(inputs) for i in range(world_size)]
         torch.distributed.all_gather(gather_list, inputs, group=group)
         return torch.cat(gather_list)
     elif isinstance(inputs, (tuple, list)):
         outputs = []
         for input_tensor in inputs:
-            assert isinstance(input_tensor, torch.tensor)
+            assert isinstance(input_tensor, torch.Tensor)
             gather_list = [torch.zeros_like(input_tensor) for i in range(world_size)]
             torch.distributed.all_gather(gather_list, input_tensor, group=group)
             output_tensor = torch.cat(gather_list)
@@ -562,12 +561,13 @@ def main():
         world_size = int(os.environ['SLURM_NTASKS'])
         args.world_size = world_size
         dist_init(host_addr, rank, local_rank, world_size, '2' + os.environ['SLURM_JOBID'][-4:])
-        test_gather(rank, world_size)
         device = torch.device("cuda", local_rank)
         xprint(f'host_addr {host_addr}')
         xprint(f'local rank {local_rank}')
         xprint(f'rank {rank}')
         xprint(f'world size {world_size}')
+        os.environ['NCCL_DEBUG'] = 'INFO'
+        os.environ['NCCL_DEBUG_SUBSYS'] = 'ALL'
 
     xprint('arguments:')
     for arg in vars(args):
@@ -638,7 +638,7 @@ def main():
 
     # Evaluation - we can ask to evaluate all the checkpoints (sub-directories) in a directory
     results = {}
-    if args.do_eval and args.local_rank in [-1, 0]:
+    if args.do_eval:
 
         checkpoints = [args.output_dir]
         if args.eval_all_checkpoints:
